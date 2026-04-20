@@ -3,56 +3,68 @@ from bs4 import BeautifulSoup
 import pandas as pd
 from datetime import datetime
 import logging
+import re
 
 # Setup basic logging
 logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
 
 def extract_data(base_url="https://fashion-studio.dicoding.dev", total_pages=50):
     """
-    Mengekstrak data produk dari website menggunakan requests dan BeautifulSoup.
+    Mengekstrak data produk dari website menggunakan Regex & BeautifulSoup yang tangguh.
     """
-    all_products = []
-    
-    # Menggunakan Session untuk efisiensi saat scraping banyak halaman
+    all_products =[]
     session = requests.Session()
     
-    # Menambahkan timestamp saat fungsi dipanggil (Syarat Skilled - 3 pts)
+    # Syarat 3 pts: timestamp
     current_timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     
-    logging.info(f"Memulai ekstraksi data dari {base_url} (Total Halaman: {total_pages})")
+    logging.info(f"Memulai ekstraksi dari {base_url} (Total Halaman: {total_pages})")
     
     for page in range(1, total_pages + 1):
-        url = f"{base_url}/?page={page}"
-        
-        try: # Syarat Advanced (4 pts) - Error handling di fungsi
+        # Memperbaiki penanganan Pagination (Halaman 1 vs Halaman 2 dst)
+        if page == 1:
+            url = base_url
+        else:
+            url = f"{base_url}/page{page}"
+            
+        try: # Syarat 4 pts: Error Handling
             response = session.get(url, timeout=10)
             response.raise_for_status() 
             
             soup = BeautifulSoup(response.text, 'html.parser')
             
-            # Asumsi elemen pembungkus produk memiliki class 'card'
-            product_cards = soup.find_all('div', class_='card')
+            # MENGGUNAKAN CLASS YANG BENAR (Berdasarkan hasil debug)
+            product_cards = soup.find_all('div', class_='collection-card')
             
             for card in product_cards:
                 try:
-                    title_elem = card.find('h5', class_='card-title')
+                    # Mengambil semua teks dalam card dan memisahkannya dengan '|'
+                    # (Cara paling aman untuk mengabaikan tag HTML yang berubah-ubah)
+                    full_text = card.get_text(separator=' | ', strip=True)
+                    
+                    # 1. Mencari Title (Biasanya di tag H)
+                    title_elem = card.find(['h2', 'h3', 'h4', 'h5'])
                     title = title_elem.text.strip() if title_elem else "Unknown Product"
                     
-                    # Mencari Price (handle $xxx atau Price Unavailable)
-                    price_elem = card.find('p', class_='price') or card.find('span', class_='price')
-                    price = price_elem.text.strip() if price_elem else "Price Unavailable"
+                    # 2. Mencari Price (Dalam price-container)
+                    price_container = card.find('div', class_='price-container')
+                    price = price_container.text.strip() if price_container else "Price Unavailable"
                     
-                    rating_elem = card.find('span', class_='rating')
-                    rating = rating_elem.text.strip() if rating_elem else "Invalid Rating"
+                    # 3. Mencari Rating dengan Regex
+                    rating_match = re.search(r'Rating:\s*([^|]+)', full_text)
+                    rating = rating_match.group(1).replace('⭐', '').strip() if rating_match else "Invalid Rating"
                     
-                    color_elem = card.find('span', class_='color')
-                    colors = color_elem.text.strip() if color_elem else "Unknown"
+                    # 4. Mencari Colors
+                    colors_match = re.search(r'(\d+\s*Colors?)', full_text)
+                    colors = colors_match.group(1).strip() if colors_match else "Unknown"
                     
-                    size_elem = card.find('span', class_='size')
-                    size = size_elem.text.strip() if size_elem else "Size: Unknown"
+                    # 5. Mencari Size
+                    size_match = re.search(r'Size:\s*([^|]+)', full_text)
+                    size = f"Size: {size_match.group(1).strip()}" if size_match else "Size: Unknown"
                     
-                    gender_elem = card.find('span', class_='gender')
-                    gender = gender_elem.text.strip() if gender_elem else "Gender: Unknown"
+                    # 6. Mencari Gender
+                    gender_match = re.search(r'Gender:\s*([^|]+)', full_text)
+                    gender = f"Gender: {gender_match.group(1).strip()}" if gender_match else "Gender: Unknown"
                     
                     all_products.append({
                         "Title": title,
@@ -64,19 +76,23 @@ def extract_data(base_url="https://fashion-studio.dicoding.dev", total_pages=50)
                         "timestamp": current_timestamp
                     })
                 except Exception as inner_e:
-                    logging.warning(f"Gagal memparsing produk di halaman {page}: {inner_e}")
+                    logging.warning(f"Gagal memparsing 1 produk: {inner_e}")
                     continue
                     
         except requests.exceptions.RequestException as e:
             logging.error(f"Error saat mengakses halaman {page}: {e}")
-            continue # Lanjut ke halaman berikutnya jika halaman ini error
+            continue
             
-    df_extracted = pd.DataFrame(all_products)
+    # Mencegah KeyError jika internet putus / gagal scraping
+    if not all_products:
+        df_extracted = pd.DataFrame(columns=["Title", "Price", "Rating", "Colors", "Size", "Gender", "timestamp"])
+    else:
+        df_extracted = pd.DataFrame(all_products)
+        
     logging.info(f"Ekstraksi selesai. Total data: {len(df_extracted)}")
     
     return df_extracted
 
 if __name__ == "__main__":
-    # Test script untuk 2 halaman pertama
     df = extract_data(total_pages=2)
     print(df.head())
